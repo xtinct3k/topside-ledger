@@ -1,10 +1,11 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { itemInfo, useCatalog } from "../catalog";
 import { ITEMS } from "../data";
 import { have, haulRows } from "../logic";
 import { EASE } from "../motion";
 import type { Progress } from "../store";
-import { Icon } from "./Icon";
 import { SectionHead } from "./SectionHead";
+import { ItemArt } from "./Tile";
 
 interface Props {
   p: Progress;
@@ -16,6 +17,7 @@ interface Props {
 }
 
 export function Haul({ p, q, setQ, hideDone, setHideDone, onOpen }: Props) {
+  const byId = useCatalog((s) => s.byId);
   const all = haulRows(p);
   const term = q.trim().toLowerCase();
   const rows = all.filter((r) => (!hideDone || r.left > 0) && (!term || ITEMS[r.k].name.toLowerCase().includes(term)));
@@ -42,12 +44,13 @@ export function Haul({ p, q, setQ, hideDone, setHideDone, onOpen }: Props) {
         <span><i style={{ background: "var(--r-c)" }} />Common</span>
         <span><i style={{ background: "var(--r-u)" }} />Uncommon</span>
         <span><i style={{ background: "var(--r-r)" }} />Rare</span>
-        <span><i style={{ background: "var(--r-x)" }} />Unconfirmed</span>
+        <span><i style={{ background: "var(--r-e)" }} />Epic</span>
+        <span><i style={{ background: "var(--r-l)" }} />Legendary</span>
       </div>
       <motion.div className="haul" layout>
         <AnimatePresence mode="popLayout">
           {rows.map(({ k, n, left }) => {
-            const it = ITEMS[k];
+            const it = itemInfo(k, byId);
             return (
               <motion.div
                 key={k}
@@ -62,7 +65,7 @@ export function Haul({ p, q, setQ, hideDone, setHideDone, onOpen }: Props) {
                   <span className="bar">
                     <b style={{ width: `${Math.min(100, Math.round((have(p, k) / n) * 100))}%` }} />
                   </span>
-                  <Icon name={it.icon} />
+                  <ItemArt info={it} />
                   <span className="ct">{left ? `−${left}` : "✓"}</span>
                 </button>
                 <div className="nm">{it.name}</div>

@@ -1,72 +1,85 @@
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
-import { STATIONS } from "./data";
+import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
+import { MAX_RAIDS, addToStash, count, maxLevel, newId, raidStashDelta, sanitize, type Ledger, type Progress, type Raid } from "./state.js";
 
-export const STORE_KEY = "topside-ledger:v1";
+export type { Progress } from "./state.js";
 
-export interface Progress {
-  inv: Record<string, number>;
-  lvl: Record<string, number>;
-  flag: Record<string, boolean>;
-}
+const CACHE_KEY = "topside-ledger:v2";
+const LEGACY_KEY = "topside-ledger:v1";
 
-interface Ledger extends Progress {
+interface LedgerStore extends Progress {
+  /** Server revision this copy is based on. */
+  rev: number;
+  /** Local edits not yet confirmed by the server. */
+  unsynced: boolean;
+  /** Bumped on every local edit; the sync loop saves when it moves. */
+  edits: number;
   setInv: (k: string, v: number | string) => void;
   setLvl: (k: string, v: number) => void;
   toggleFlag: (k: string) => void;
+  addRaid: (raid: Omit<Raid, "id">) => void;
+  removeRaid: (id: string) => void;
   replace: (p: unknown) => void;
   reset: () => void;
+  /** Take the server's copy. Not a local edit, so it never triggers a save. */
+  adopt: (l: Ledger) => void;
+  markSaved: (rev: number, editsSent: number) => void;
 }
 
-const count = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
-const maxLevel = (k: string) => STATIONS.find((s) => s.id === k)?.max ?? 4;
+const pickProgress = ({ inv, lvl, flag, raids }: Progress): Progress => ({ inv, lvl, flag, raids });
+export const progressOf = (s: Progress) => pickProgress(s);
 
-/** Coerce anything (old saves, imported files) into a clean Progress. */
-export function sanitize(o: unknown): Progress {
-  const out: Progress = { inv: {}, lvl: {}, flag: {} };
-  if (!o || typeof o !== "object") return out;
-  const src = o as Partial<Record<keyof Progress, unknown>>;
-  const each = (col: keyof Progress, fn: (k: string, v: unknown) => void) => {
-    const m = src[col];
-    if (m && typeof m === "object") Object.entries(m).forEach(([k, v]) => fn(k, v));
-  };
-  each("inv", (k, v) => (out.inv[k] = count(v)));
-  each("lvl", (k, v) => (out.lvl[k] = Math.min(count(v), maxLevel(k))));
-  each("flag", (k, v) => (out.flag[k] = !!v));
-  return out;
-}
+// Read the pre-sync (v1) local save once, so nothing entered before this version is lost.
+const storage: StateStorage = {
+  getItem: (name) => localStorage.getItem(name) ?? (name === CACHE_KEY ? localStorage.getItem(LEGACY_KEY) : null),
+  setItem: (name, value) => localStorage.setItem(name, value),
+  removeItem: (name) => localStorage.removeItem(name),
+};
 
-export const isBackup = (o: unknown) =>
-  !!o && typeof o === "object" && ["inv", "lvl", "flag"].some((c) => typeof (o as Record<string, unknown>)[c] === "object");
-
-export const useLedger = create<Ledger>()(
+export const useLedger = create<LedgerStore>()(
   persist(
-    (set) => ({
-      inv: {},
-      lvl: {},
-      flag: {},
-      setInv: (k, v) => set((s) => ({ inv: { ...s.inv, [k]: count(v) } })),
-      setLvl: (k, v) => set((s) => ({ lvl: { ...s.lvl, [k]: Math.min(count(v), maxLevel(k)) } })),
-      toggleFlag: (k) => set((s) => ({ flag: { ...s.flag, [k]: !s.flag[k] } })),
-      replace: (p) => set(sanitize(p)),
-      reset: () => set({ inv: {}, lvl: {}, flag: {} }),
-    }),
+    (set) => {
+      const edit = (fn: (s: LedgerStore) => Partial<Progress>) => set((s) => ({ ...fn(s), unsynced: true, edits: s.edits + 1 }));
+      return {
+        inv: {},
+        lvl: {},
+        flag: {},
+        raids: [],
+        rev: 0,
+        unsynced: false,
+        edits: 0,
+        setInv: (k, v) => edit((s) => ({ inv: addToStash({ ...s.inv, [k]: 0 }, [{ id: k, n: count(v) }]) })),
+        setLvl: (k, v) => edit((s) => ({ lvl: { ...s.lvl, [k]: Math.min(count(v), maxLevel(k)) } })),
+        toggleFlag: (k) => edit((s) => ({ flag: { ...s.flag, [k]: !s.flag[k] } })),
+        addRaid: (r) =>
+          edit((s) => {
+            const raid: Raid = { ...r, id: newId() };
+            return { raids: [raid, ...s.raids].slice(0, MAX_RAIDS), inv: addToStash(s.inv, raidStashDelta(raid)) };
+          }),
+        removeRaid: (id) =>
+          edit((s) => {
+            const raid = s.raids.find((r) => r.id === id);
+            return raid ? { raids: s.raids.filter((r) => r.id !== id), inv: addToStash(s.inv, raidStashDelta(raid), -1) } : {};
+          }),
+        replace: (p) => edit(() => sanitize(p)),
+        reset: () => edit(() => ({ inv: {}, lvl: {}, flag: {}, raids: [] })),
+        adopt: (l) => set({ ...sanitize(l), rev: l.rev, unsynced: false }),
+        markSaved: (rev, editsSent) => set((s) => ({ rev, unsynced: s.edits !== editsSent })),
+      };
+    },
     {
-      name: STORE_KEY,
-      version: 1,
-      storage: createJSONStorage(() => localStorage),
-      partialize: ({ inv, lvl, flag }) => ({ inv, lvl, flag }),
-      merge: (saved, current) => ({ ...current, ...sanitize(saved) }),
+      name: CACHE_KEY,
+      version: 2,
+      storage: createJSONStorage(() => storage),
+      partialize: (s) => ({ ...pickProgress(s), rev: s.rev, unsynced: s.unsynced }),
+      migrate: (saved) => ({ ...sanitize(saved), rev: 0, unsynced: false }),
+      merge: (saved, current) => {
+        const s = (saved ?? {}) as Partial<LedgerStore>;
+        return { ...current, ...sanitize(saved), rev: Number(s.rev) || 0, unsynced: !!s.unsynced };
+      },
     },
   ),
 );
 
-export function storageWorks() {
-  try {
-    localStorage.setItem("__tl", "1");
-    localStorage.removeItem("__tl");
-    return true;
-  } catch {
-    return false;
-  }
-}
+export const isBackup = (o: unknown) =>
+  !!o && typeof o === "object" && ["inv", "lvl", "flag", "raids"].some((c) => typeof (o as Record<string, unknown>)[c] === "object");

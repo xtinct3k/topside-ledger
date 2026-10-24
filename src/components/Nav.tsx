@@ -1,13 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { EASE } from "../motion";
+import { useSync, type Phase } from "../sync";
 
 interface Props {
-  saving: boolean;
   onExport: () => void;
   onImport: () => void;
+  onLock: () => void;
   onReset: () => void;
 }
+
+const STATUS: Partial<Record<Phase, [cls: string, label: string]>> = {
+  loading: ["", "Connecting"],
+  synced: ["on", "Synced"],
+  saving: ["busy", "Saving"],
+  offline: ["err", "Offline"],
+};
 
 export function Mark() {
   return (
@@ -20,8 +28,10 @@ export function Mark() {
   );
 }
 
-export function Nav({ saving, onExport, onImport, onReset }: Props) {
+export function Nav({ onExport, onImport, onLock, onReset }: Props) {
   const [open, setOpen] = useState(false);
+  const { phase, message } = useSync();
+  const [cls, label] = STATUS[phase] ?? ["", ""];
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -54,11 +64,12 @@ export function Nav({ saving, onExport, onImport, onReset }: Props) {
           <a href="#workshop">Workshop</a>
           <a href="#jobs">Jobs</a>
           <a href="#haul">Haul</a>
+          <a href="#raids">Raids</a>
         </nav>
         <div className="nav-r">
-          <span className={`status ${saving ? "on" : "err"}`}>
+          <span className={`status ${cls}`} title={message || undefined}>
             <i />
-            <span>{saving ? "Saved on this device" : "Not saving"}</span>
+            <span>{label}</span>
           </span>
           <div className="menu" ref={ref}>
             <button type="button" className="icon-btn" aria-haspopup="true" aria-expanded={open} aria-controls="menuList" aria-label="Data options" onClick={() => setOpen((o) => !o)}>
@@ -80,6 +91,7 @@ export function Nav({ saving, onExport, onImport, onReset }: Props) {
                 >
                   <button type="button" onClick={run(onExport)}>Export backup</button>
                   <button type="button" onClick={run(onImport)}>Import backup</button>
+                  <button type="button" onClick={run(onLock)}>Lock this device</button>
                   <button type="button" className="danger" onClick={run(onReset)}>Reset progress</button>
                 </motion.div>
               )}
