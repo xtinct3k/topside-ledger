@@ -1,9 +1,6 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
 import { setPass } from "../api";
-import { rise, stagger } from "../motion";
 import { connect, useSync } from "../sync";
-import { Mark } from "./Nav";
 
 export function Login() {
   const { phase, message } = useSync();
@@ -13,25 +10,24 @@ export function Login() {
 
   return (
     <main className="gate">
-      <motion.div className="gate-card" initial="hidden" animate="show" variants={stagger}>
-        <motion.div variants={rise}>
-          <Mark />
-        </motion.div>
-        <motion.h1 className="title" variants={rise}>
-          <span>Topside</span>
-          <span className="accent">Ledger</span>
-        </motion.h1>
+      <div className="gate-card">
+        <span className="code">[ ACCESS ]</span>
+        <h1>
+          Topside
+          <br />
+          Ledger
+        </h1>
         {setup ? (
-          <motion.div variants={rise} className="gate-setup">
-            <p className="k">Almost there</p>
+          <div className="gate-body">
+            <p className="lbl">Setup needed</p>
             <p>{message}</p>
-            <button type="button" className="act" onClick={() => void connect()}>
+            <button type="button" className="btn" onClick={() => void connect()}>
               Try again
             </button>
-          </motion.div>
+          </div>
         ) : (
-          <motion.form
-            variants={rise}
+          <form
+            className="gate-body"
             onSubmit={async (e) => {
               e.preventDefault();
               if (!pw) return;
@@ -41,18 +37,18 @@ export function Login() {
               setBusy(false);
             }}
           >
-            <label className="k" htmlFor="pw">
+            <label className="lbl" htmlFor="pw">
               Password
             </label>
             <input id="pw" className="text" type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus />
-            {message && <p className="gate-err">{message}</p>}
-            <button type="submit" className="act primary block" disabled={busy || !pw}>
+            {message && <p className="err">{message}</p>}
+            <button type="submit" className="btn hot wide" disabled={busy || !pw}>
               {busy ? "Unlocking…" : "Unlock"}
             </button>
-            <p className="hint">Your progress is private. This device remembers the password until you lock it.</p>
-          </motion.form>
+            <p className="fine">Your progress is private. This device remembers the password until you lock it.</p>
+          </form>
         )}
-      </motion.div>
+      </div>
     </main>
   );
 }

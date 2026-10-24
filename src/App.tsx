@@ -1,98 +1,84 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
-import { AnimatePresence, MotionConfig, motion } from "framer-motion";
-import { loadCatalog } from "./catalog";
-import { GOALS } from "./data";
-import { useMediaQuery, useStoredState } from "./hooks";
-import { nextGoal, statusOf } from "./logic";
+import { brief } from "./brief";
+import { loadEvents, loadGame, useGame } from "./gamedata";
 import { isBackup, progressOf, useLedger } from "./store";
 import { lock, startSync, useSync } from "./sync";
-import { Assistant, type ChatMsg } from "./components/Assistant";
-import { Haul } from "./components/Haul";
-import { Hero } from "./components/Hero";
-import { ItemSheet } from "./components/ItemSheet";
-import { JobBoard, type Filter } from "./components/JobBoard";
-import { LogRaidSheet } from "./components/LogRaidSheet";
+import { useAdvice, useUi } from "./ui";
+import { ItemDetail } from "./components/ItemDetail";
 import { Login } from "./components/Login";
-import { Mark, Nav } from "./components/Nav";
-import { RaidLog } from "./components/RaidLog";
+import { ROUTES, Sidebar, TopBar, type Route } from "./components/Shell";
 import { Toasts, type Toast } from "./components/Toasts";
-import { Workshop } from "./components/Workshop";
+import { Arcs } from "./screens/Arcs";
+import { Database } from "./screens/Database";
+import { Events } from "./screens/Events";
+import { Quests } from "./screens/Quests";
+import { Raids } from "./screens/Raids";
+import { Stash } from "./screens/Stash";
+import { Traders } from "./screens/Traders";
+import { Workshop } from "./screens/Workshop";
+
+const routeOf = (hash: string): Route => {
+  const id = hash.replace(/^#/, "");
+  return ROUTES.some((r) => r[0] === id) ? (id as Route) : "stash";
+};
+
+function useRoute() {
+  const [route, setRoute] = useState(() => routeOf(location.hash));
+  useEffect(() => {
+    const on = () => setRoute(routeOf(location.hash));
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  return route;
+}
 
 export default function App() {
   const phase = useSync((s) => s.phase);
-  const p = useLedger();
-  const [openItem, setOpenItem] = useState<string | null>(null);
-  const [logOpen, setLogOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chat, setChat] = useState<ChatMsg[]>([]);
-  const [filter, setFilter] = useStoredState<Filter>("topside-ledger:filter", "all");
-  const [hideDone, setHideDone] = useStoredState("topside-ledger:hideDone", false);
-  const [q, setQ] = useState("");
+  const route = useRoute();
+  const gameStatus = useGame((s) => s.status);
+  const selected = useUi((s) => s.item);
+  const close = useUi((s) => s.close);
+  const rows = useAdvice();
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const desktop = useMediaQuery("(min-width: 900px)");
-  const opener = useRef<HTMLElement | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
 
   const toast = useCallback((msg: string, err = false) => {
     const id = Date.now() + Math.random();
     setToasts((t) => [...t.slice(-2), { id, msg, err }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3600);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
   }, []);
 
-  // Announce jobs that just became buildable, but not after bulk loads (sync, import, reset, assistant).
-  const next = nextGoal(p);
-  const readyKey = GOALS.filter((g) => statusOf(p, g, next) === "ready")
-    .map((g) => g.id)
-    .join(",");
-  const prevReady = useRef(readyKey);
-  const quietUntil = useRef(0);
-  const hush = useCallback(() => {
-    quietUntil.current = Date.now() + 800;
+  useEffect(() => startSync({ notify: toast, hush: () => {} }), [toast]);
+  useEffect(() => {
+    void loadGame();
+    void loadEvents();
+    const t = setInterval(() => void loadEvents(), 15 * 60 * 1000);
+    return () => clearInterval(t);
   }, []);
   useEffect(() => {
-    const before = new Set(prevReady.current.split(","));
-    if (Date.now() > quietUntil.current) {
-      readyKey
-        .split(",")
-        .filter((id) => id && !before.has(id))
-        .forEach((id) => toast(`${GOALS.find((g) => g.id === id)?.title} is ready to build`));
+    mainRef.current?.scrollTo({ top: 0 });
+  }, [route]);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && !(e.target as HTMLElement).closest("input, textarea, select") && close();
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, [close]);
+
+  const copyForClaude = async () => {
+    const data = useGame.getState().data;
+    if (!data) return toast("Game data is still loading.", true);
+    const s = useLedger.getState();
+    try {
+      await navigator.clipboard.writeText(brief(progressOf(s), data, rows, useUi.getState().plan));
+      toast("Copied. Paste it into a Claude chat and ask away.");
+    } catch {
+      toast("Couldn't reach the clipboard in this browser.", true);
     }
-    prevReady.current = readyKey;
-  }, [readyKey, toast]);
-
-  useEffect(() => startSync({ notify: toast, hush }), [toast, hush]);
-  useEffect(() => void loadCatalog(), []);
-
-  const remember = () => (opener.current = document.activeElement as HTMLElement | null);
-  const restore = () => opener.current?.focus();
-  const openSheet = useCallback((k: string) => {
-    remember();
-    setOpenItem(k);
-  }, []);
-  const closeSheet = useCallback(() => {
-    setOpenItem(null);
-    restore();
-  }, []);
-  const openLog = useCallback(() => {
-    remember();
-    setLogOpen(true);
-  }, []);
-  const closeLog = useCallback(() => {
-    setLogOpen(false);
-    restore();
-  }, []);
-  const closeChat = useCallback(() => {
-    setChatOpen(false);
-    restore();
-  }, []);
-
-  const anyOpen = !!openItem || logOpen || chatOpen;
-  useEffect(() => {
-    document.documentElement.classList.toggle("lock", anyOpen);
-  }, [anyOpen]);
+  };
 
   const exportBackup = () => {
-    const body = JSON.stringify({ app: "topside-ledger", version: 2, exportedAt: new Date().toISOString(), ...progressOf(useLedger.getState()) }, null, 2);
+    const body = JSON.stringify({ app: "topside-ledger", version: 3, exportedAt: new Date().toISOString(), ...progressOf(useLedger.getState()) }, null, 2);
     const url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
     const a = document.createElement("a");
     a.href = url;
@@ -101,7 +87,7 @@ export default function App() {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    toast("Backup downloaded");
+    toast("Backup downloaded.");
   };
 
   const importBackup = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -112,85 +98,50 @@ export default function App() {
       const data: unknown = JSON.parse(await file.text());
       if (!isBackup(data)) throw new Error("not a backup");
       if (!window.confirm("Replace your current progress with this backup?")) return;
-      hush();
       useLedger.getState().replace(data);
-      toast("Backup imported");
+      toast("Backup imported.");
     } catch {
-      toast("That file isn't a Topside Ledger backup", true);
+      toast("That file isn't a Topside Ledger backup.", true);
     }
   };
 
   const reset = () => {
     if (!window.confirm("Reset all progress, on every device? Export a backup first if you might want it back.")) return;
-    hush();
     useLedger.getState().reset();
-    toast("Progress reset");
+    toast("Progress reset.");
   };
 
-  if (phase === "locked" || phase === "unconfigured") {
-    return (
-      <MotionConfig reducedMotion="user">
-        <Login />
-      </MotionConfig>
-    );
-  }
+  if (phase === "locked" || phase === "unconfigured") return <Login />;
 
   return (
-    <MotionConfig reducedMotion="user">
+    <div className={`app ${selected ? "has-detail" : ""}`}>
       <a className="skip" href="#main">
         Skip to content
       </a>
-      <Nav onExport={exportBackup} onImport={() => fileRef.current?.click()} onLock={lock} onReset={reset} />
-
-      <main id="main" className="wrap">
-        <Hero p={p} next={next} onOpen={openSheet} />
-        <Workshop p={p} />
-        <JobBoard p={p} next={next} filter={filter} setFilter={setFilter} onOpen={openSheet} />
-        <Haul p={p} q={q} setQ={setQ} hideDone={hideDone} setHideDone={setHideDone} onOpen={openSheet} />
-        <RaidLog p={p} onLog={openLog} onOpen={openSheet} />
+      <Sidebar route={route} onCopy={copyForClaude} onExport={exportBackup} onImport={() => fileRef.current?.click()} onLock={lock} onReset={reset} />
+      <TopBar route={route} />
+      <main id="main" className="main" ref={mainRef}>
+        {gameStatus === "error" && (
+          <p className="banner">MetaForge game data couldn't be loaded. Your stash still works; names and details will fill in once it's back.</p>
+        )}
+        {route === "stash" && <Stash />}
+        {route === "workshop" && <Workshop toast={toast} />}
+        {route === "quests" && <Quests toast={toast} />}
+        {route === "items" && <Database />}
+        {route === "traders" && <Traders />}
+        {route === "arcs" && <Arcs />}
+        {route === "events" && <Events />}
+        {route === "raids" && <Raids toast={toast} />}
+        {gameStatus === "loading" && route !== "stash" && route !== "events" && route !== "raids" && <p className="loading">Loading game data…</p>}
       </main>
-
-      <footer className="foot">
-        <div className="foot-in">
-          <Mark />
-          <p>
-            Item data and icons from{" "}
-            <a href="https://metaforge.app/arc-raiders" target="_blank" rel="noreferrer">
-              MetaForge
-            </a>
-            . Job costs from post-2.0 guides; if the game differs, trust the game.
-          </p>
-          <p>Your progress is private to this site's password and syncs across your devices.</p>
-          <p>Fan-made tool, not affiliated with Embark Studios.</p>
-        </div>
-      </footer>
-
-      <motion.button
-        type="button"
-        className="fab"
-        onClick={() => {
-          remember();
-          setChatOpen(true);
-        }}
-        initial={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: anyOpen ? 0 : 1, scale: anyOpen ? 0.8 : 1 }}
-        transition={{ type: "spring", damping: 22, stiffness: 300, delay: 0.4 }}
-        aria-label="Ask Claude"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" />
-          <path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" />
-        </svg>
-        <span>Ask Claude</span>
-      </motion.button>
-
-      <AnimatePresence>
-        {openItem && <ItemSheet key={`i-${openItem}`} k={openItem} p={p} desktop={desktop} onClose={closeSheet} />}
-        {logOpen && <LogRaidSheet key="log" p={p} desktop={desktop} onClose={closeLog} onSaved={toast} />}
-        {chatOpen && <Assistant key="chat" desktop={desktop} onClose={closeChat} onAdopt={hush} msgs={chat} setMsgs={setChat} />}
-      </AnimatePresence>
+      {selected && (
+        <>
+          <div className="scrim" onClick={close} aria-hidden="true" />
+          <ItemDetail />
+        </>
+      )}
       <Toasts items={toasts} />
       <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={importBackup} />
-    </MotionConfig>
+    </div>
   );
 }

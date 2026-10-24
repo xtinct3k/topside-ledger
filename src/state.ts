@@ -1,5 +1,5 @@
 // Ledger shape shared by the browser and the API. Pure: no browser or Node APIs.
-import { LEGACY_IDS, STATIONS } from "./data.js";
+import { DEFAULT_RESERVE, LEGACY_IDS, LEGACY_STATIONS, STATION_MAX } from "./data.js";
 
 export type Outcome = "extracted" | "died" | "aborted";
 export const OUTCOMES: Outcome[] = ["extracted", "died", "aborted"];
@@ -20,9 +20,14 @@ export interface Raid {
 }
 
 export interface Progress {
+  /** Stash counts by item id. */
   inv: Record<string, number>;
+  /** Station levels by station id. */
   lvl: Record<string, number>;
-  flag: Record<string, boolean>;
+  /** Completed quest ids. */
+  quest: Record<string, boolean>;
+  /** Always-keep amounts by item id, on top of what upgrades and quests need. */
+  reserve: Record<string, number>;
   raids: Raid[];
 }
 
@@ -34,10 +39,11 @@ export interface Ledger extends Progress {
 
 export const MAX_RAIDS = 500;
 
-export const emptyProgress = (): Progress => ({ inv: {}, lvl: {}, flag: {}, raids: [] });
+export const emptyProgress = (): Progress => ({ inv: {}, lvl: {}, quest: {}, reserve: {}, raids: [] });
 
 export const count = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
-export const maxLevel = (k: string) => STATIONS.find((s) => s.id === k)?.max ?? 4;
+export const maxLevel = (k: string) => STATION_MAX[k] ?? 0;
+export const stationId = (k: string) => LEGACY_STATIONS[k] ?? k;
 export const itemId = (k: string) => LEGACY_IDS[k] ?? k;
 const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
@@ -60,7 +66,7 @@ export function sanitize(o: unknown): Progress {
   const out = emptyProgress();
   if (!o || typeof o !== "object") return out;
   const src = o as Record<string, unknown>;
-  const each = (col: "inv" | "lvl" | "flag", fn: (k: string, v: unknown) => void) => {
+  const each = (col: "inv" | "lvl" | "quest" | "reserve", fn: (k: string, v: unknown) => void) => {
     const m = src[col];
     if (m && typeof m === "object" && !Array.isArray(m)) Object.entries(m).forEach(([k, v]) => fn(k, v));
   };
@@ -69,12 +75,19 @@ export function sanitize(o: unknown): Progress {
     if (n) out.inv[itemId(k)] = n;
   });
   each("lvl", (k, v) => {
-    const n = Math.min(count(v), maxLevel(k));
-    if (n) out.lvl[k] = n;
+    const id = stationId(k);
+    const n = Math.min(count(v), maxLevel(id));
+    if (n) out.lvl[id] = n;
   });
-  each("flag", (k, v) => {
-    if (v) out.flag[k] = true;
+  each("quest", (k, v) => {
+    if (v) out.quest[k.slice(0, 80)] = true;
   });
+  each("reserve", (k, v) => {
+    const n = count(v);
+    if (n) out.reserve[itemId(k)] = n;
+  });
+  // Saves from before reserves existed keep the old Stockpile amounts.
+  if (!("reserve" in src)) out.reserve = { ...DEFAULT_RESERVE };
   if (Array.isArray(src.raids)) {
     out.raids = src.raids
       .map(cleanRaid)
@@ -86,7 +99,7 @@ export function sanitize(o: unknown): Progress {
 }
 
 export const isEmpty = (p: Progress) =>
-  !Object.keys(p.inv).length && !Object.keys(p.lvl).length && !Object.keys(p.flag).length && !p.raids.length;
+  !Object.keys(p.inv).length && !Object.keys(p.lvl).length && !Object.keys(p.quest).length && !p.raids.length;
 
 export function newId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);

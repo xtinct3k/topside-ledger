@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
-import { MAX_RAIDS, addToStash, count, maxLevel, newId, raidStashDelta, sanitize, type Ledger, type Progress, type Raid } from "./state.js";
+import { MAX_RAIDS, addToStash, count, maxLevel, newId, raidStashDelta, sanitize, type Ledger, type Progress, type Raid, type RaidItem } from "./state.js";
 
 export type { Progress } from "./state.js";
 
@@ -16,7 +16,12 @@ interface LedgerStore extends Progress {
   edits: number;
   setInv: (k: string, v: number | string) => void;
   setLvl: (k: string, v: number) => void;
-  toggleFlag: (k: string) => void;
+  toggleQuest: (k: string) => void;
+  setReserve: (k: string, v: number | string) => void;
+  /** Raise a station to `lv` and take the parts it costs out of the stash. */
+  build: (station: string, lv: number, parts: RaidItem[]) => void;
+  /** Complete a quest and take the items it asks for out of the stash. */
+  turnIn: (quest: string, parts: RaidItem[]) => void;
   addRaid: (raid: Omit<Raid, "id">) => void;
   removeRaid: (id: string) => void;
   replace: (p: unknown) => void;
@@ -26,7 +31,7 @@ interface LedgerStore extends Progress {
   markSaved: (rev: number, editsSent: number) => void;
 }
 
-const pickProgress = ({ inv, lvl, flag, raids }: Progress): Progress => ({ inv, lvl, flag, raids });
+const pickProgress = ({ inv, lvl, quest, reserve, raids }: Progress): Progress => ({ inv, lvl, quest, reserve, raids });
 export const progressOf = (s: Progress) => pickProgress(s);
 
 // Read the pre-sync (v1) local save once, so nothing entered before this version is lost.
@@ -43,14 +48,25 @@ export const useLedger = create<LedgerStore>()(
       return {
         inv: {},
         lvl: {},
-        flag: {},
+        quest: {},
+        reserve: {},
         raids: [],
         rev: 0,
         unsynced: false,
         edits: 0,
         setInv: (k, v) => edit((s) => ({ inv: addToStash({ ...s.inv, [k]: 0 }, [{ id: k, n: count(v) }]) })),
         setLvl: (k, v) => edit((s) => ({ lvl: { ...s.lvl, [k]: Math.min(count(v), maxLevel(k)) } })),
-        toggleFlag: (k) => edit((s) => ({ flag: { ...s.flag, [k]: !s.flag[k] } })),
+        toggleQuest: (k) =>
+          edit((s) => {
+            const quest = { ...s.quest };
+            if (quest[k]) delete quest[k];
+            else quest[k] = true;
+            return { quest };
+          }),
+        build: (station, lv, parts) =>
+          edit((s) => ({ lvl: { ...s.lvl, [station]: Math.min(lv, maxLevel(station)) }, inv: addToStash(s.inv, parts, -1) })),
+        turnIn: (quest, parts) => edit((s) => ({ quest: { ...s.quest, [quest]: true }, inv: addToStash(s.inv, parts, -1) })),
+        setReserve: (k, v) => edit((s) => ({ reserve: addToStash({ ...s.reserve, [k]: 0 }, [{ id: k, n: count(v) }]) })),
         addRaid: (r) =>
           edit((s) => {
             const raid: Raid = { ...r, id: newId() };
@@ -62,7 +78,7 @@ export const useLedger = create<LedgerStore>()(
             return raid ? { raids: s.raids.filter((r) => r.id !== id), inv: addToStash(s.inv, raidStashDelta(raid), -1) } : {};
           }),
         replace: (p) => edit(() => sanitize(p)),
-        reset: () => edit(() => ({ inv: {}, lvl: {}, flag: {}, raids: [] })),
+        reset: () => edit(() => ({ inv: {}, lvl: {}, quest: {}, reserve: {}, raids: [] })),
         adopt: (l) => set({ ...sanitize(l), rev: l.rev, unsynced: false }),
         markSaved: (rev, editsSent) => set((s) => ({ rev, unsynced: s.edits !== editsSent })),
       };
@@ -82,4 +98,4 @@ export const useLedger = create<LedgerStore>()(
 );
 
 export const isBackup = (o: unknown) =>
-  !!o && typeof o === "object" && ["inv", "lvl", "flag", "raids"].some((c) => typeof (o as Record<string, unknown>)[c] === "object");
+  !!o && typeof o === "object" && ["inv", "lvl", "quest", "reserve", "raids"].some((c) => typeof (o as Record<string, unknown>)[c] === "object");

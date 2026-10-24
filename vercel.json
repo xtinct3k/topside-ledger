@@ -1,5 +1,5 @@
 {
   "functions": {
-    "api/chat.ts": { "maxDuration": 60 }
+    "api/game.ts": { "maxDuration": 60 }
   }
 }
